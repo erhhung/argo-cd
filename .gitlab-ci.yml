@@ -35,35 +35,48 @@ spec:
   script:
     - !reference [.setup, script]
     - '# ========== .build =========='
-    - buildah_build argocd --no-cache -f ./Dockerfile .
-    - buildah_push argocd $CI_COMMIT_SHORT_SHA
+    - buildah_build $IMAGE_NAME --build-arg GIT_TAG=$CI_COMMIT_SHORT_SHA --no-cache -f ./Dockerfile .
+    - buildah_push  $IMAGE_NAME $CI_COMMIT_SHORT_SHA
 
 .deploy:
   script:
     - '# ========== .deploy =========='
-    - image="$CI_REGISTRY_PATH/argocd:$CI_COMMIT_SHORT_SHA"
+    - IMAGE="$CI_REGISTRY_PATH/$IMAGE_NAME:$CI_COMMIT_SHORT_SHA"
+
     - '# --- argocd-repo-server ---'
-    - set_k8s_image Deployment $NAMESPACE argocd-repo-server initContainer copyutil $image
-    - set_k8s_image Deployment $NAMESPACE argocd-repo-server container repo-server $image
-    - kubectl rollout restart Deployment -n $NAMESPACE argocd-repo-server
+    - component='argocd-repo-server'
+    - set_k8s_image Deployment $NAMESPACE $component initContainer copyutil $IMAGE
+    - set_k8s_image Deployment $NAMESPACE $component container ${component#argocd-} $IMAGE
+    - kubectl rollout restart Deployment -n $NAMESPACE $component
+
     - '# --- argocd-applicationset-controller ---'
-    - set_k8s_image Deployment $NAMESPACE argocd-applicationset-controller container applicationset-controller $image
-    - kubectl rollout restart Deployment -n $NAMESPACE argocd-applicationset-controller
+    - component='argocd-applicationset-controller'
+    - set_k8s_image Deployment $NAMESPACE $component container ${component#argocd-} $IMAGE
+    - kubectl rollout restart Deployment -n $NAMESPACE $component
+
     - '# --- argocd-application-controller ---'
-    - set_k8s_image StatefulSet $NAMESPACE argocd-application-controller container application-controller $image
-    - kubectl rollout restart StatefulSet -n $NAMESPACE argocd-application-controller
+    - component='argocd-application-controller'
+    - set_k8s_image StatefulSet $NAMESPACE $component container ${component#argocd-} $IMAGE
+    - kubectl rollout restart StatefulSet -n $NAMESPACE $component
+
     - '# --- argocd-notifications-controller ---'
-    - set_k8s_image Deployment $NAMESPACE argocd-notifications-controller container notifications-controller $image
-    - kubectl rollout restart Deployment -n $NAMESPACE argocd-notifications-controller
+    - component='argocd-notifications-controller'
+    - set_k8s_image Deployment $NAMESPACE $component container ${component#argocd-} $IMAGE
+    - kubectl rollout restart Deployment -n $NAMESPACE $component
+
     - '# --- argocd-commit-server ---'
-    - set_k8s_image Deployment $NAMESPACE argocd-commit-server container commit-server $image
-    - kubectl rollout restart Deployment -n $NAMESPACE argocd-commit-server
+    - component='argocd-commit-server'
+    - set_k8s_image Deployment $NAMESPACE $component container ${component#argocd-} $IMAGE
+    - kubectl rollout restart Deployment -n $NAMESPACE $component
+
     - '# --- argocd-server ---'
-    - set_k8s_image Deployment $NAMESPACE argocd-server container server $image
-    - kubectl rollout restart Deployment -n $NAMESPACE argocd-server
+    - component='argocd-server'
+    - set_k8s_image Deployment $NAMESPACE $component container ${component#argocd-} $IMAGE
+    - kubectl rollout restart Deployment -n $NAMESPACE $component
 
 variables:
   UPSTREAM: https://github.com/erhhung/argo-cd.git
+  IMAGE_NAME: argocd
   NAMESPACE: argocd
   # CI_DEBUG: 600
 
