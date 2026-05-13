@@ -1,0 +1,94 @@
+name: CI Pipeline
+
+on:
+  # https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#push
+  push:
+    branches:
+      - gitea-ci
+  # https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch
+  workflow_dispatch: # allow manual trigger
+
+env:
+  IMAGE_NAME: argocd
+  NAMESPACE: argocd
+  # CI_DEBUG: 600
+
+defaults:
+  run:
+    shell: bash
+
+# https://docs.github.com/en/actions/reference/workflows-and-actions/contexts
+jobs:
+  build:
+    # run directly in the runner container in host mode
+    # so that `dind` container won't have to separately
+    # repull al2023-devops image that's already on host
+    runs-on: al2023-devops
+    steps:
+      # https://github.com/actions/checkout
+      - name: Check out Git Repo
+        id: checkout
+        uses: actions/checkout@v6
+
+      # https://github.com/erhhung/homelab-k8s/tree/main/files/gitea/runner/ciutils.sh
+      - name: Log in to Registry
+        id: login
+        run: buildah_login
+
+      - name: Build Docker Image
+        id: build
+        run: buildah_build $IMAGE_NAME --build-arg GIT_TAG=$GIT_COMMIT_SHORT_SHA --no-cache -f ./Dockerfile .
+
+      - name: Push Docker Image
+        id: push
+        run: buildah_push $IMAGE_NAME $GIT_COMMIT_SHORT_SHA
+
+  deploy:
+    runs-on: al2023-devops
+    needs: build
+    steps:
+      - name: Prepare to Deploy
+        id: prepare
+        # $GIT_COMMIT_SHORT_SHA is only available after first run
+        # step in each job, exported by "/ci/scripts/ci-utils.sh"
+        run: export_env IMAGE "$CI_REGISTRY_PATH/$IMAGE_NAME:$GIT_COMMIT_SHORT_SHA"
+
+      # Gitea Actions does not support
+      # variable expansion in step name
+      - name: Deploy argocd-repo-server
+        env:
+          COMPONENT: argocd-repo-server
+        run: |
+          set_k8s_image Deployment $NAMESPACE $COMPONENT initContainer copyutil $IMAGE
+          set_k8s_image Deployment $NAMESPACE $COMPONENT container ${COMPONENT#argocd-} $IMAGE
+          kubectl rollout restart Deployment -n $NAMESPACE $COMPONENT
+
+      - name: Deploy argocd-applicationset-controller
+        env:
+          COMPONENT: argocd-applicationset-controller
+        # https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#yaml-anchors-and-aliases
+        run: &deployment |
+          set_k8s_image Deployment $NAMESPACE $COMPONENT container ${COMPONENT#argocd-} $IMAGE
+          kubectl rollout restart Deployment -n $NAMESPACE $COMPONENT
+
+      - name: Deploy argocd-application-controller
+        env:
+          COMPONENT: argocd-application-controller
+        run: |
+          set_k8s_image StatefulSet $NAMESPACE $COMPONENT container ${COMPONENT#argocd-} $IMAGE
+          kubectl rollout restart StatefulSet -n $NAMESPACE $COMPONENT
+
+      - name: Deploy argocd-notifications-controller
+        env:
+          COMPONENT: argocd-notifications-controller
+        run: *deployment
+
+      - name: Deploy argocd-commit-server
+        env:
+          COMPONENT: argocd-commit-server
+        run: *deployment
+
+      - name: Deploy argocd-server
+        env:
+          COMPONENT: argocd-server
+        run: *deployment
